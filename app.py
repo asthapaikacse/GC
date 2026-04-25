@@ -56,6 +56,8 @@ class CLAHETransform:
 # ============================================
 @st.cache_resource
 def load_model():
+    import gdown
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = models.densenet121(pretrained=False)
@@ -64,23 +66,26 @@ def load_model():
 
     model_path = "glaucoma.pth"
 
-    # Download from Google Drive if not exists
+    # Download if not exists
     if not os.path.exists(model_path):
-        try:
-            import gdown
-            file_id = "1sRI23GizKxjrgZuGtThDDg-CzxlmGD21"   
-            url = f"https://drive.google.com/uc?id={file_id}"
-            gdown.download(url, model_path, quiet=False)
-        except:
-            return None, device, False
+        url = "https://drive.google.com/uc?id=1sRI23GizKxjrgZuGtThDDg-CzxlmGD21"
+        gdown.download(url, model_path, quiet=False)
 
     try:
         checkpoint = torch.load(model_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
+
+        # 🔥 HANDLE BOTH CASES
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint)
+
         model.to(device)
         model.eval()
         return model, device, True
-    except:
+
+    except Exception as e:
+        st.error(f"Loading error: {e}")   
         return None, device, False
 
 # ============================================
