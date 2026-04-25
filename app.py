@@ -6,7 +6,6 @@ from PIL import Image
 import numpy as np
 import cv2
 import os
-from datetime import datetime
 import warnings
 import logging
 
@@ -22,7 +21,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# ====== CUSTOM CSS ======
+# ====== SIMPLE UI ======
 st.markdown("""
 <style>
 .result-box {
@@ -52,40 +51,52 @@ class CLAHETransform:
         return Image.fromarray(img_np)
 
 # ============================================
-# LOAD MODEL (GOOGLE DRIVE SUPPORT)
+# LOAD MODEL (FINAL FIXED)
 # ============================================
 @st.cache_resource
 def load_model():
     import gdown
+    import torch.serialization
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # 🔥 FIX: allow numpy scalar
+    torch.serialization.add_safe_globals([np.core.multiarray.scalar])
+
+    # 🔥 MUST MATCH TRAINING ARCHITECTURE
     model = models.densenet121(pretrained=False)
     num_features = model.classifier.in_features
-    model.classifier = nn.Linear(num_features, 2)
+    model.classifier = nn.Sequential(
+        nn.Dropout(0.3),
+        nn.Linear(num_features, 512),
+        nn.ReLU(),
+        nn.Dropout(0.3),
+        nn.Linear(512, 2)
+    )
 
     model_path = "glaucoma.pth"
 
-    # Download if not exists
+    # Download from Google Drive
     if not os.path.exists(model_path):
         url = "https://drive.google.com/uc?id=1sRI23GizKxjrgZuGtThDDg-CzxlmGD21"
         gdown.download(url, model_path, quiet=False)
 
     try:
-        checkpoint = torch.load(model_path, map_location=device)
+        checkpoint = torch.load(
+            model_path,
+            map_location=device,
+            weights_only=False  # 🔥 CRITICAL FIX
+        )
 
-        # 🔥 HANDLE BOTH CASES
-        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint)
+        model.load_state_dict(checkpoint['model_state_dict'])
 
         model.to(device)
         model.eval()
+
         return model, device, True
 
     except Exception as e:
-        st.error(f"Loading error: {e}")   
+        st.error(f"❌ Loading error: {e}")
         return None, device, False
 
 # ============================================
@@ -124,7 +135,7 @@ def main():
     model, device, loaded = load_model()
 
     if not loaded:
-        st.error("❌ Model not loaded. Check Google Drive file ID.")
+        st.error("❌ Model not loaded")
         return
 
     uploaded = st.file_uploader("Upload retinal image", type=['jpg', 'png', 'jpeg'])
@@ -134,13 +145,13 @@ def main():
 
         col1, col2 = st.columns(2)
         with col1:
-            st.image(image, caption="Original")
+            st.image(image, caption="Original Image")
 
-        clahe = CLAHETransform()(image)
+        clahe_img = CLAHETransform()(image)
         with col2:
-            st.image(clahe, caption="Enhanced")
+            st.image(clahe_img, caption="Enhanced (CLAHE)")
 
-        if st.button("Analyze"):
+        if st.button("Analyze Image"):
             pred, conf, probs = predict_image(model, image, device)
 
             st.subheader("Result")
@@ -151,9 +162,8 @@ def main():
                 st.markdown("<div class='result-box normal'>✅ Normal</div>", unsafe_allow_html=True)
 
             st.write(f"Confidence: {conf*100:.2f}%")
-
-            st.write("Normal:", f"{probs[0]*100:.2f}%")
-            st.write("Glaucoma:", f"{probs[1]*100:.2f}%")
+            st.write(f"Normal: {probs[0]*100:.2f}%")
+            st.write(f"Glaucoma: {probs[1]*100:.2f}%")
 
             st.info("⚠️ This is not a medical diagnosis. Consult a doctor.")
 
